@@ -1,0 +1,265 @@
+generator client {
+  provider = "prisma-client-js"
+  output   = "../lib/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum Role {
+  PLAYER
+  ORGANIZER
+  BOTH
+}
+
+enum EFootballPlatform {
+  PS
+  XBOX
+  PC
+  MOBILE
+}
+
+enum TournamentFormat {
+  GROUP_KNOCKOUT
+  SINGLE_ELIMINATION
+  DOUBLE_ELIMINATION
+  SWISS
+}
+
+enum TournamentStatus {
+  DRAFT
+  OPEN
+  APPROVAL
+  ACTIVE
+  COMPLETED
+  CANCELLED
+}
+
+enum RegistrationStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum RoundType {
+  GROUP
+  SWISS
+  KNOCKOUT
+}
+
+enum MatchStatus {
+  SCHEDULED
+  PENDING_CONFIRM
+  CONFIRMED
+  DISPUTED
+  WALKOVER
+}
+
+enum BracketType {
+  WINNERS
+  LOSERS
+  GRAND
+}
+
+model User {
+  id               String             @id @default(cuid())
+  email            String             @unique
+  passwordHash     String
+  name             String
+  role             Role               @default(PLAYER)
+  eFootballGamertag String?
+  eFootballPlatform EFootballPlatform?
+  eFootballPlayerId String?
+  avatarUrl        String?
+  createdAt        DateTime           @default(now())
+  updatedAt        DateTime           @updatedAt
+
+  organizedTournaments Tournament[]     @relation("Organizer")
+  registrations        TournamentPlayer[]
+  teamsLed             Team[]            @relation("TeamCaptain")
+  teamMemberships      TeamMember[]
+  trophies             Trophy[]
+  notifications        Notification[]
+  overrides            OverrideLog[]
+  reportedMatches      Match[]           @relation("MatchReporter")
+  confirmedMatches     Match[]           @relation("MatchConfirmer")
+
+  @@index([email])
+}
+
+model Team {
+  id        String       @id @default(cuid())
+  name      String
+  captainId String
+  createdAt DateTime     @default(now())
+
+  captain User           @relation("TeamCaptain", fields: [captainId], references: [id])
+  members TeamMember[]
+
+  @@index([captainId])
+}
+
+model TeamMember {
+  id     String @id @default(cuid())
+  teamId String
+  userId String
+
+  team Team @relation(fields: [teamId], references: [id], onDelete: Cascade)
+  user User @relation(fields: [userId], references: [id])
+
+  @@unique([teamId, userId])
+  @@index([userId])
+}
+
+model Tournament {
+  id                String              @id @default(cuid())
+  name              String
+  slug              String              @unique
+  description       String?
+  format            TournamentFormat
+  status            TournamentStatus    @default(DRAFT)
+  rules             String?
+  maxPlayers        Int?
+  groupConfig       Json?               // e.g. { "groupSize": 4, "qualifiersPerGroup": 2 }
+  scoringConfig     Json?               // e.g. { "win": 3, "draw": 1, "loss": 0, "thirdPlaceMatch": true }
+  matchDeadlineDays Int?                // days allowed before a result is due
+  organizerId       String
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+
+  organizer   User                   @relation("Organizer", fields: [organizerId], references: [id], onDelete: Cascade)
+  registrations TournamentPlayer[]
+  groups       Group[]
+  matches      Match[]
+  trophies     Trophy[]
+  overrides    OverrideLog[]
+
+  @@index([organizerId])
+  @@index([slug])
+  @@index([status])
+}
+
+model TournamentPlayer {
+  id           String             @id @default(cuid())
+  tournamentId String
+  playerId     String
+  status       RegistrationStatus @default(PENDING)
+  seed         Int?               // 1-based seed for bracket seeding
+  createdAt    DateTime           @default(now())
+
+  tournament       Tournament         @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  player           User               @relation(fields: [playerId], references: [id], onDelete: Cascade)
+  groupMembership  GroupParticipant?
+  homeMatches      Match[]            @relation("HomePlayer")
+  awayMatches      Match[]            @relation("AwayPlayer")
+  wonMatches       Match[]            @relation("MatchWinner")
+
+  @@unique([tournamentId, playerId])
+  @@index([playerId])
+}
+
+model Group {
+  id           String             @id @default(cuid())
+  tournamentId String
+  name         String             // e.g. "Group A"
+  sortOrder    Int
+
+  tournament   Tournament           @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  participants GroupParticipant[]
+  matches      Match[]
+
+  @@unique([tournamentId, name])
+  @@index([tournamentId])
+}
+
+model GroupParticipant {
+  id                   String           @id @default(cuid())
+  groupId              String
+  registrationId       String           @unique
+  position             Int?             // position within group for scheduling
+
+  group        Group               @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  registration TournamentPlayer   @relation(fields: [registrationId], references: [id], onDelete: Cascade)
+
+  @@index([groupId])
+}
+
+model Match {
+  id            String      @id @default(cuid())
+  tournamentId  String
+  roundType     RoundType
+  roundNumber   Int
+  bracketType   BracketType?
+  groupId       String?
+  bracketPosition Int?      // position in knockout bracket
+  homeRegistrationId String?
+  awayRegistrationId String?
+  homeScore     Int?
+  awayScore     Int?
+  homeShootout  Int?        // penalty shootout score (home)
+  awayShootout  Int?        // penalty shootout score (away)
+  winnerId      String?
+  status        MatchStatus @default(SCHEDULED)
+  deadline      DateTime?
+  reportedById  String?
+  confirmedById String?
+  createdAt     DateTime    @default(now())
+  updatedAt     DateTime    @updatedAt
+
+  tournament     Tournament        @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  group          Group?            @relation(fields: [groupId], references: [id])
+  homeRegistration TournamentPlayer? @relation("HomePlayer", fields: [homeRegistrationId], references: [id])
+  awayRegistration TournamentPlayer? @relation("AwayPlayer", fields: [awayRegistrationId], references: [id])
+  winner         TournamentPlayer? @relation("MatchWinner", fields: [winnerId], references: [id])
+  reportedBy     User?             @relation("MatchReporter", fields: [reportedById], references: [id])
+  confirmedBy    User?             @relation("MatchConfirmer", fields: [confirmedById], references: [id])
+  overrides      OverrideLog[]
+
+  @@index([tournamentId, roundNumber])
+  @@index([groupId])
+  @@index([status])
+}
+
+model Trophy {
+  id           String   @id @default(cuid())
+  tournamentId String
+  playerId     String
+  awardedAt    DateTime @default(now())
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  player     User       @relation(fields: [playerId], references: [id], onDelete: Cascade)
+
+  @@index([playerId])
+}
+
+model OverrideLog {
+  id           String   @id @default(cuid())
+  tournamentId String
+  matchId      String?
+  actorId      String
+  action       String
+  previousData Json?
+  newData      Json?
+  createdAt    DateTime @default(now())
+
+  tournament Tournament @relation(fields: [tournamentId], references: [id], onDelete: Cascade)
+  match      Match?     @relation(fields: [matchId], references: [id], onDelete: SetNull)
+  actor      User       @relation(fields: [actorId], references: [id])
+
+  @@index([tournamentId])
+  @@index([matchId])
+}
+
+model Notification {
+  id        String   @id @default(cuid())
+  userId    String
+  title     String
+  body      String?
+  read      Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, read])
+}
